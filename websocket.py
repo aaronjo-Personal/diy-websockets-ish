@@ -41,11 +41,11 @@ while True:
         if ":" in header_field:
             # unpack the header vield into k,v pairs, 1 is max 1 split
             header_field, header_value = header_field.split(":", 1)
-            http_headers[header_field.strip()] = header_value.strip()
+            http_headers[header_field.lower().strip()] = header_value.strip()
 
     print(http_headers)
 
-    client_key = http_headers["Sec-WebSocket-Key"]
+    client_key = http_headers["sec-websocket-key"]
     if client_key:
         # magic_string is an industry standard https://www.rfc-editor.org/info/rfc6455/
         magic_string = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
