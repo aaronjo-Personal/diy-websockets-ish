@@ -99,7 +99,29 @@ async def handle_client(
                 break
 
             # Print the raw binary exactly as the computer sees it
+            # example if i type "cool" into wscat:
+            # b'\x81\x84\x9b\xbf\x94Z\xf8\xd0\xfb6'
+            #
+            # frame_data[0] is \x81 / 10000001
+            # first bit is FIN=1 so this is the final or only message fragment
+            # last 4 bits are 0001 so opcode=1 which means text
+            #
+            # frame_data[1] is \x84 / 10000100
+            # first bit is MASK=1 because browser / client frames have to be masked
+            # last 7 bits are 0000100 which means the payload is 4 bytes long
+            # if this was 126 or 127 the actual length would be in the next bytes
+            #
+            # frame_data[2:6] is b'\x9b\xbf\x94Z'
+            # this is the random 4 byte masking key used to scramble the payload
+            #
+            # frame_data[6:] is b'\xf8\xd0\xfb6'
+            # this is the actual "cool" payload but its still scrambled
             print(f"Received raw frame: {repr(frame_data)}")
+
+            # decoding raw frames
+            # decoding is a bunch of XOR opperations
+            # TODO: understand the decoding opperations and format of frame data better
+
     except (ConnectionError, UnicodeDecodeError) as error:
         print(f"Connection ended early for {client_address}: {error}")
     finally:
