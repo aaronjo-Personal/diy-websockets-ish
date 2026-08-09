@@ -3,6 +3,7 @@
 import socket
 import hashlib
 import base64
+import binascii
 
 # https://docs.python.org/3/library/socket.html#socket-objects
 # socket.socket(family=AF_INET, type=SOCK_STREAM, proto=0, fileno=None)
@@ -43,9 +44,35 @@ while True:
             header_field, header_value = header_field.split(":", 1)
             http_headers[header_field.lower().strip()] = header_value.strip()
 
+    expected_headers = {
+        "upgrade": "websocket",
+        "sec-websocket-version": "13",
+    }
+    client_key = http_headers.get("sec-websocket-key", "")
+    try:
+        decoded_client_key = base64.b64decode(client_key, validate=True)
+    except binascii.Error:
+        decoded_client_key = b""
+
+    is_websocket_request = (
+        header_section[0].lower().startswith("get ")
+        and all(
+            http_headers.get(name, "").lower() == expected_value
+            for name, expected_value in expected_headers.items()
+        )
+        and "upgrade"
+        in {
+            value.strip().lower()
+            for value in http_headers.get("connection", "").split(",")
+        }
+        and len(decoded_client_key) == 16
+    )
+    if not is_websocket_request:
+        client_connection.close()
+        continue
+
     print(http_headers)
 
-    client_key = http_headers["sec-websocket-key"]
     if client_key:
         # magic_string is an industry standard https://www.rfc-editor.org/info/rfc6455/
         magic_string = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
