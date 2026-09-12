@@ -242,6 +242,9 @@ class Server:
                 return
             participant = self.add_participant(reader, writer)
             print(f"Handshake sent to {client_address}")
+            welcome = json.dumps({"type": "welcome", "id": participant.id})
+            writer.write(encode_text_frame(welcome))
+            await writer.drain()
             await self.broadcast_participants()
 
             while True:

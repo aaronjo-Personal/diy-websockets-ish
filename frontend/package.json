@@ -8,6 +8,9 @@
     "build": "tsc && vp build",
     "preview": "vp preview"
   },
+  "dependencies": {
+    "effect": "4.0.0-rc.115"
+  },
   "devDependencies": {
     "typescript": "~6.0.2",
     "vite": "catalog:",
