@@ -4,6 +4,7 @@ import asyncio
 import base64
 import binascii
 import hashlib
+import json
 from contextlib import suppress
 from dataclasses import dataclass, field
 from uuid import uuid4
@@ -14,14 +15,14 @@ def encode_text_frame(message: str) -> bytes:
     outgoing_payload = message.encode("utf-8")
     payload_length = len(outgoing_payload)
 
-    # keeping this to short frames for now, 126+ needs extra length bytes
-    if payload_length >= 126:
-        error_message = "Outgoing text frames must be under 126 bytes for now"
-        raise ValueError(error_message)
-
     # 0x81 means FIN=1 and opcode=1 (a complete text message)
     # server frames aren't masked so there's no masking key or XOR here
-    header = bytes([0x81, payload_length])
+    if payload_length < 126:
+        header = bytes([0x81, payload_length])
+    elif payload_length < 65536:
+        header = b"\x81\x7e" + payload_length.to_bytes(2, "big")
+    else:
+        header = b"\x81\x7f" + payload_length.to_bytes(8, "big")
     return header + outgoing_payload
 
 
@@ -53,7 +54,7 @@ def decode_text_frame(frame_data: bytes) -> str:
     # FRAME COMES IN AS
     # [header] [masking key] [scrambled message]
     # 2 Bytes  4 Bytes       wtv is left This can change later for partial / multi frames but im not worrying abt it for my use case.
-    header, masking_key, payload = (
+    _header, masking_key, payload = (
         frame_data[:2],
         frame_data[2:6],
         frame_data[6:],
@@ -76,9 +77,8 @@ async def perform_handshake(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
 ) -> bool:
-    # 1024 is max bytes to read in at once
     # await pauses only this client so asyncio can work on another client
-    request_data = await reader.read(1024)
+    request_data = await reader.readuntil(b"\r\n\r\n")
 
     # traffic comes in as bytes utf decode
     # we're going to split the http headers on newline
@@ -170,7 +170,7 @@ class Server:
     def add_participant(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> Participant:
-        participant = Participant(uuid4().hex, reader, writer)
+        participant = Participant(uuid4().hex, reader, writer, {"x": 0, "y": 0})
         self.participants[participant.id] = participant
         return participant
 
@@ -191,6 +191,32 @@ class Server:
         participant = self.participants[participant_id]
         participant.info.update(info)
         return participant
+
+    async def broadcast_participants(self) -> None:
+        message = json.dumps(
+            {
+                "type": "participants",
+                "participants": [
+                    {
+                        "id": participant.id,
+                        "x": participant.info["x"],
+                        "y": participant.info["y"],
+                    }
+                    for participant in self.participants.values()
+                ],
+            },
+            separators=(",", ":"),
+        )
+        frame = encode_text_frame(message)
+        writers = [participant.writer for participant in self.participants.values()]
+        for writer in writers:
+            with suppress(ConnectionError):
+                writer.write(frame)
+        for writer in writers:
+            try:
+                await writer.drain()
+            except ConnectionError:
+                writer.close()
 
     # need 2 loops, one for clients connecting to server, and then one for once connected
     # asyncio handles the first loop and gives every client its own handle_client coroutine
@@ -216,31 +242,61 @@ class Server:
                 return
             participant = self.add_participant(reader, writer)
             print(f"Handshake sent to {client_address}")
+            await self.broadcast_participants()
 
-            # inner loop for actions im just going to echo back for start
             while True:
                 # await pauses this client here when it has no frame data
-                frame_data = await reader.read(1024)
-
-                # If the user disconnected, frame_data will be empty
-                if not frame_data:
-                    print("Client disconnected.")
+                header = await reader.readexactly(2)
+                payload_length = header[1] & 0x7F
+                if not header[1] & 0x80 or payload_length >= 126:
+                    error_message = (
+                        "Expected a masked frame with a payload under 126 bytes"
+                    )
+                    raise ValueError(error_message)
+                frame_data = header + await reader.readexactly(4 + payload_length)
+                if header[0] == 0x88:
+                    writer.write(b"\x88\x00")
+                    await writer.drain()
                     break
+                if header[0] != 0x81:
+                    error_message = "Expected a complete text frame"
+                    raise ValueError(error_message)
 
                 message = decode_text_frame(frame_data)
-
                 print(f"translated message: {message}")
 
-                # we're then going to respond with echo client_address says "xyz"
-                outgoing_frame = encode_text_frame(f'{client_address} says "{message}"')
-                writer.write(outgoing_frame)
-                await writer.drain()
+                match json.loads(message):
+                    case {
+                        "type": "pointer",
+                        "x": int() | float() as x,
+                        "y": int() | float() as y,
+                    } if (
+                        not isinstance(x, bool)
+                        and not isinstance(y, bool)
+                        and 0 <= x <= 1
+                        and 0 <= y <= 1
+                    ):
+                        _ = self.update_participant_info(
+                            participant.id, {"x": x, "y": y}
+                        )
+                        await self.broadcast_participants()
+                    case _:
+                        error_message = "Expected pointer coordinates between 0 and 1"
+                        raise ValueError(error_message)
 
-        except (ConnectionError, UnicodeDecodeError, ValueError) as error:
+        except asyncio.IncompleteReadError:
+            print("Client disconnected.")
+        except (
+            ConnectionError,
+            UnicodeDecodeError,
+            ValueError,
+            asyncio.LimitOverrunError,
+        ) as error:
             print(f"Connection ended early for {client_address}: {error}")
         finally:
             if participant is not None:
                 await self.remove_participant(participant.id)
+                await self.broadcast_participants()
             else:
                 writer.close()
                 with suppress(ConnectionError):
