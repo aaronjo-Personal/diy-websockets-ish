@@ -8,6 +8,13 @@ import hashlib
 
 # need 2 loops, one for clients connecting to server, and then one for once connected
 # asyncio handles the first loop and gives every client its own handle_client coroutine
+
+# DEF couroutine
+# Coroutines are computer program components that can be suspended and resumed — generalizing subroutines — for cooperative multitasking. Coroutines are well-suited for implementing familiar program components such as cooperative tasks, exceptions, event loops, iterators, infinite lists and pipes.
+
+# They have been described as "functions whose execution you can pause".[1]
+
+
 async def handle_client(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
@@ -121,6 +128,30 @@ async def handle_client(
             # decoding raw frames
             # decoding is a bunch of XOR opperations
             # TODO: understand the decoding opperations and format of frame data better
+
+            # FRAME COMES IN AS
+            # [header] [masking key] [scrambled message]
+            # 2 Bytes  4 Bytes       wtv is left This can change later for partial / multi frames but im not worrying abt it for my use case.
+            header, masking_key, payload = (
+                frame_data[:2],
+                frame_data[2:6],
+                frame_data[6:],
+            )
+
+            # unmask the payload
+
+            # ^ is exlusive-or or bitwise opperator in python we are going to use that to XOR with masking key
+
+            unmasked_payload = [
+                byte ^ masking_key[i % 4] for i, byte in enumerate(payload)
+            ]
+
+            # this returns unmaksed Byte values
+            # use bytes() and decode() to get text conversion
+
+            message = bytes(unmasked_payload).decode("utf-8")
+
+            print(f"translated message {message}")
 
     except (ConnectionError, UnicodeDecodeError) as error:
         print(f"Connection ended early for {client_address}: {error}")
