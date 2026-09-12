@@ -4,6 +4,7 @@ import asyncio
 import base64
 import binascii
 import hashlib
+from contextlib import suppress
 from dataclasses import dataclass, field
 from uuid import uuid4
 
@@ -181,7 +182,8 @@ class Server:
         # close this client connection even if its handshake was invalid
         writer.close()
         # close queues the close, wait_closed pauses until it is actually closed
-        await writer.wait_closed()
+        with suppress(ConnectionError):
+            await writer.wait_closed()
 
     def update_participant_info(
         self, participant_id: str, info: dict[str, str | int | float | bool | None]
@@ -241,7 +243,8 @@ class Server:
                 await self.remove_participant(participant.id)
             else:
                 writer.close()
-                await writer.wait_closed()
+                with suppress(ConnectionError):
+                    await writer.wait_closed()
 
     async def start(self) -> None:
         # https://docs.python.org/3/library/socket.html#socket-objects
