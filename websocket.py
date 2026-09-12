@@ -4,6 +4,8 @@ import asyncio
 import base64
 import binascii
 import hashlib
+from dataclasses import dataclass, field
+from uuid import uuid4
 
 
 def encode_text_frame(message: str) -> bytes:
@@ -60,9 +62,7 @@ def decode_text_frame(frame_data: bytes) -> str:
 
     # ^ is exlusive-or or bitwise opperator in python we are going to use that to XOR with masking key
 
-    unmasked_payload = [
-        byte ^ masking_key[i % 4] for i, byte in enumerate(payload)
-    ]
+    unmasked_payload = [byte ^ masking_key[i % 4] for i, byte in enumerate(payload)]
 
     # this returns unmaksed Byte values
     # use bytes() and decode() to get text conversion
@@ -147,79 +147,139 @@ async def perform_handshake(
     return True
 
 
-# need 2 loops, one for clients connecting to server, and then one for once connected
-# asyncio handles the first loop and gives every client its own handle_client coroutine
+# https://docs.python.org/3/library/dataclasses.html
+# auto handles constructor / destructors aswell as getter/setters handels boilerplate for this
+# Frozen makes record immutable
+# slots makes attribute list a fixed size
+@dataclass(frozen=True, slots=True)
+class Participant:
+    id: str
+    reader: asyncio.StreamReader
+    writer: asyncio.StreamWriter
+    info: dict[str, str | int | float | bool | None] = field(default_factory=dict)
 
-# DEF couroutine
-# Coroutines are computer program components that can be suspended and resumed — generalizing subroutines — for cooperative multitasking. Coroutines are well-suited for implementing familiar program components such as cooperative tasks, exceptions, event loops, iterators, infinite lists and pipes.
 
-# They have been described as "functions whose execution you can pause".[1]
+class Server:
+    def __init__(self, host: str = "localhost", port: int = 6969) -> None:
+        self.host = host
+        self.port = port
+        self.participants: dict[str, Participant] = {}
+        self.server: asyncio.Server | None = None
 
+    def add_participant(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> Participant:
+        participant = Participant(uuid4().hex, reader, writer)
+        self.participants[participant.id] = participant
+        return participant
 
-async def handle_client(
-    reader: asyncio.StreamReader,
-    writer: asyncio.StreamWriter,
-) -> None:
-    # reader is bytes coming from this client, writer is bytes going back to this client
-    client_address = writer.get_extra_info("peername")
-    print(f"\n--- New connection from {client_address} ---")
-
-    try:
-        if not await perform_handshake(reader, writer):
+    async def remove_participant(self, participant_id: str) -> None:
+        participant = self.participants.pop(participant_id, None)
+        if participant is None:
             return
-        print(f"Handshake sent to {client_address}")
-
-        # inner loop for actions im just going to echo back for start
-        while True:
-            # await pauses this client here when it has no frame data
-            frame_data = await reader.read(1024)
-
-            # If the user disconnected, frame_data will be empty
-            if not frame_data:
-                print("Client disconnected.")
-                break
-
-            message = decode_text_frame(frame_data)
-
-            print(f"translated message: {message}")
-
-            # we're then going to respond with echo client_address says "xyz"
-            outgoing_frame = encode_text_frame(f'{client_address} says "{message}"')
-            writer.write(outgoing_frame)
-            await writer.drain()
-
-    except (ConnectionError, UnicodeDecodeError, ValueError) as error:
-        print(f"Connection ended early for {client_address}: {error}")
-    finally:
+        writer = participant.writer
         # close this client connection even if its handshake was invalid
         writer.close()
         # close queues the close, wait_closed pauses until it is actually closed
         await writer.wait_closed()
 
+    def update_participant_info(
+        self, participant_id: str, info: dict[str, str | int | float | bool | None]
+    ) -> Participant:
+        participant = self.participants[participant_id]
+        participant.info.update(info)
+        return participant
+
+    # need 2 loops, one for clients connecting to server, and then one for once connected
+    # asyncio handles the first loop and gives every client its own handle_client coroutine
+
+    # DEF couroutine
+    # Coroutines are computer program components that can be suspended and resumed — generalizing subroutines — for cooperative multitasking. Coroutines are well-suited for implementing familiar program components such as cooperative tasks, exceptions, event loops, iterators, infinite lists and pipes.
+
+    # They have been described as "functions whose execution you can pause".[1]
+
+    async def handle_client(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        # reader is bytes coming from this client, writer is bytes going back to this client
+        client_address = writer.get_extra_info("peername")
+        print(f"\n--- New connection from {client_address} ---")
+
+        participant: Participant | None = None
+
+        try:
+            if not await perform_handshake(reader, writer):
+                return
+            participant = self.add_participant(reader, writer)
+            print(f"Handshake sent to {client_address}")
+
+            # inner loop for actions im just going to echo back for start
+            while True:
+                # await pauses this client here when it has no frame data
+                frame_data = await reader.read(1024)
+
+                # If the user disconnected, frame_data will be empty
+                if not frame_data:
+                    print("Client disconnected.")
+                    break
+
+                message = decode_text_frame(frame_data)
+
+                print(f"translated message: {message}")
+
+                # we're then going to respond with echo client_address says "xyz"
+                outgoing_frame = encode_text_frame(f'{client_address} says "{message}"')
+                writer.write(outgoing_frame)
+                await writer.drain()
+
+        except (ConnectionError, UnicodeDecodeError, ValueError) as error:
+            print(f"Connection ended early for {client_address}: {error}")
+        finally:
+            if participant is not None:
+                await self.remove_participant(participant.id)
+            else:
+                writer.close()
+                await writer.wait_closed()
+
+    async def start(self) -> None:
+        # https://docs.python.org/3/library/socket.html#socket-objects
+        # socket.socket(family=AF_INET, type=SOCK_STREAM, proto=0, fileno=None)
+        # AF_INET = IPv4 SOCK_STREAM = TCP
+        # asyncio still makes this same tcp socket for us underneath start_server
+
+        # this line lets me reuse the port
+        # bind socket to an IP / Port
+        # listen for incoming, where 50 is max connection
+        # asyncio also calls handle_client(reader, writer) for every accepted connection
+        server = await asyncio.start_server(
+            self.handle_client,
+            self.host,
+            self.port,
+            reuse_address=True,
+            backlog=50,
+        )
+        self.server = server
+        print(f"listening on ws://{self.host}:{self.port}")
+
+        try:
+            # async with will clean up the server socket when main stops
+            async with server:
+                # this keeps the server running and gives the event loop time to run each client
+                await server.serve_forever()
+        finally:
+            await asyncio.gather(
+                *(
+                    self.remove_participant(participant_id)
+                    for participant_id in list(self.participants)
+                )
+            )
+
 
 async def main() -> None:
-    # https://docs.python.org/3/library/socket.html#socket-objects
-    # socket.socket(family=AF_INET, type=SOCK_STREAM, proto=0, fileno=None)
-    # AF_INET = IPv4 SOCK_STREAM = TCP
-    # asyncio still makes this same tcp socket for us underneath start_server
-
-    # this line lets me reuse the port
-    # bind socket to an IP / Port
-    # listen for incoming, where 50 is max connection
-    # asyncio also calls handle_client(reader, writer) for every accepted connection
-    server = await asyncio.start_server(
-        handle_client,
-        "localhost",
-        6969,
-        reuse_address=True,
-        backlog=50,
-    )
-    print("listening on ws://localhost:6969")
-
-    # async with will clean up the server socket when main stops
-    async with server:
-        # this keeps the server running and gives the event loop time to run each client
-        await server.serve_forever()
+    server = Server()
+    await server.start()
 
 
 if __name__ == "__main__":
