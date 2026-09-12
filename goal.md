@@ -134,13 +134,17 @@ list(frame_data)
 [f"{byte:08b}" for byte in frame_data]
 
 ['10000001', '10000100', ...]
-
 My suggested reading order:
 
 1. MDN: Writing WebSocket servers (https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API/Writing_WebSocket_servers.) for the approachable explanation.
 2. RFC 6455 §5.2 (https://www.rfc-editor.org/rfc/rfc6455.html#section-5.2) for the frame layout.
 3. RFC 6455 §5.3 (https://www.rfc-editor.org/rfc/rfc6455.html#section-5.3) for masking.
 4. RFC 6455 §5.6 (https://www.rfc-editor.org/rfc/rfc6455.html#section-5.6) for text versus binary payloads.
+   The most important takeaway: the masked bytes are not supposed to be readable. Their only meaning is recovered after combining them with that frame’s four-byte masking
+   key.
 
-The most important takeaway: the masked bytes are not supposed to be readable. Their only meaning is recovered after combining them with that frame’s four-byte masking
-key.
+# FRONTEND
+
+Okay weve established the server side of things for the most part its good enough.
+
+going to add a frontend that when client connects to it starts a WS connections and streams pointer location on the screen x,y coord pair thats the goal
