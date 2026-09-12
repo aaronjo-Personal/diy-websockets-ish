@@ -86,3 +86,61 @@ If the browser sends Opcode 9 (Ping), your server must immediately reply with Op
 etc we'll worry about phase 3 + later
 
 https://datatracker.ietf.org/doc/html/rfc6455
+
+DECODING RESEARCH
+
+• Yes, this is a specific standard: The WebSocket Protocol, RFC 6455.
+
+The easiest reference is MDN’s Writing WebSocket servers (https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API/Writing_WebSocket_servers.). Read the sections
+“Format” and “Reading and unmasking the data.” After that, the authoritative specification is RFC 6455 §5.2–5.3
+(https://www.rfc-editor.org/rfc/rfc6455.html#section-5.2).
+
+The key idea is that the masked payload bytes do not have an independent meaning. They are deliberately scrambled and will usually look random.
+
+Think of the frame as an envelope:
+
+81 84 | 9b bf 94 5a | f8 d0 fb 36
+───── ─────────── ───────────
+label masking key scrambled contents
+
+- 81 84 describes the envelope: text frame, final fragment, masked, four-byte payload.
+- 9b bf 94 5a is the temporary four-byte masking key.
+- f8 d0 fb 36 is the scrambled message.
+- After unmasking, those final four bytes become 63 6f 6f 6c, which is UTF-8/ASCII for cool.
+
+The mask changes for every client frame, so typing cool again will probably produce different raw bytes. That is expected. Client-to-server frames must be masked;
+server-to-client frames are not masked. This behavior is defined by RFC 6455 §5.3 (https://www.rfc-editor.org/rfc/rfc6455.html#section-5.3).
+
+Python’s byte display also makes this more confusing:
+
+b'\x9b\xbf\x94Z'
+
+That is still four bytes:
+
+\x9b \xbf \x94 Z
+
+Python displays printable bytes as characters, so Z is actually 0x5a. Similarly, the final 6 in your payload is byte 0x36, not 0x06.
+
+For learning, these views are much clearer:
+
+frame_data.hex()
+
+81849bbf945af8d0fb36
+
+list(frame_data)
+
+[129, 132, 155, 191, 148, 90, 248, 208, 251, 54]
+
+[f"{byte:08b}" for byte in frame_data]
+
+['10000001', '10000100', ...]
+
+My suggested reading order:
+
+1. MDN: Writing WebSocket servers (https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API/Writing_WebSocket_servers.) for the approachable explanation.
+2. RFC 6455 §5.2 (https://www.rfc-editor.org/rfc/rfc6455.html#section-5.2) for the frame layout.
+3. RFC 6455 §5.3 (https://www.rfc-editor.org/rfc/rfc6455.html#section-5.3) for masking.
+4. RFC 6455 §5.6 (https://www.rfc-editor.org/rfc/rfc6455.html#section-5.6) for text versus binary payloads.
+
+The most important takeaway: the masked bytes are not supposed to be readable. Their only meaning is recovered after combining them with that frame’s four-byte masking
+key.
